@@ -3,6 +3,7 @@
 
 import datetime
 import shutil
+import time
 import tkinter
 import urllib.request
 import urllib.error
@@ -29,14 +30,13 @@ __doc__ = \
       
     
     Options:
-      -
       -h --help             Show this screen.
       -u --ui               Run audio recorder with UI.
       -l --listrecordings   List all recordings in audiorecorder folder
       --url=<url>           Source URL of radio stream
       --filename=<name>     Name of recording [default: myRadio.mp3]
-      --duration=<time>     Duration of recording in seconds [default: 5]
-      --blocksize=<size>    Block size for read/write in bytes [default: 64]
+      --duration=<time>     Duration of recording in seconds [default: 10]
+      --blocksize=<size>    Block size for read/write in bytes [default: 128]
     """
 
 
@@ -58,8 +58,10 @@ class Audiorecorder:
         self.duration = duration
         self.blocksize = blocksize
         self.t = None
-        self.success = FALSE
+        self.rec_done = FALSE
         self.player = None
+        self.stopped = self.closed = FALSE
+        self.saved = FALSE
 
         # TKinter UI
         self.root = Tk()
@@ -80,24 +82,27 @@ class Audiorecorder:
         self.entries['Duration (s)'].insert(0, self.duration)
         self.entries['Blocksize'].insert(0, self.blocksize)
 
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.root.mainloop()
+        if args['<url>'] is None:
+            self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+            self.root.mainloop()
 
     # UI Event Methods
     def exit_pressed(self):
         # delete temporary file on exit
-        if self.temp_filename:
+        if not self.saved and self.temp_filename:
             if messagebox.askokcancel("Quit", "Do you want to quit? Unsaved file will be lost."):
                 self.close()
         else:
-            self.root.destroy()
+            self.close()
 
     def close(self):
-        if self.t:
-            self.t.kill = TRUE
+        self.root.withdraw()
+        self.stopped = self.closed = TRUE
         if self.player:
             self.player.release()
-        os.remove(self.temp_filename)
+        print(threading.enumerate())
+        if self.temp_filename:
+            os.remove(self.temp_filename)
         self.root.destroy()
 
     def on_closing(self):
@@ -105,17 +110,31 @@ class Audiorecorder:
 
     def record_pressed(self):
         if not self.t:
+            self.stopped = FALSE
             self.t = threading.Thread(target=self.long_running_task)
             self.t.start()
+            print(threading.enumerate())
         else:
-            Audiorecorder('http://radios.rtbf.be/vivabxl-128.mp3', self.filename, self.duration, self.blocksize)
+            Audiorecorder('http://radios.rtbf.be/vivabxl-128.mp3', self.filename, 10, self.blocksize)
 
     def long_running_task(self):
-        self.entries['Source-URL']['state'] = self.entries['Duration (s)']['state'] = self.entries['Blocksize']['state'] = 'disabled'
+        self.entries['Source-URL']['state'] = self.entries['Duration (s)']['state'] = self.entries['Blocksize'][
+            'state'] = 'disabled'
         self.record_stream()
-        if self.success == TRUE:
-            self.player = vlc.MediaPlayer(self.temp_filename)  # load last recorded in Player
-            self.b2['state'] = self.b3['state'] = self.b4['state'] = self.b5['state'] = NORMAL
+        # Clean up temp file or load temp file into player after thread finished
+        if self.rec_done == TRUE:
+            if self.closed == TRUE:
+                os.remove(self.temp_filename)
+            else:
+                # Update Player
+                self.player = vlc.MediaPlayer(self.temp_filename)  # load last recorded in Player
+                self.b2['state'] = self.b3['state'] = self.b4['state'] = self.b5['state'] = NORMAL
+                # Write Back actual recording times
+                self.entries['Duration (s)']['state'] = NORMAL
+                self.entries['Duration (s)'].delete(0, END)
+                self.entries['Duration (s)'].insert(0, self.duration)
+                self.entries['Duration (s)']['state'] = DISABLED
+                print("Duration: " + self.duration)
 
     def play_pressed(self):
         if self.player.is_playing() == 0:
@@ -126,29 +145,37 @@ class Audiorecorder:
         self.player.pause()
 
     def stop_pressed(self):
-        self.player.stop()
+        if self.t and self.t.is_alive():
+            self.stopped = TRUE
+            print("stopped recording: ", self.stopped)
+            self.player = vlc.MediaPlayer(self.temp_filename)  # load last recorded in Player
+            self.b2['state'] = self.b3['state'] = self.b5['state'] = NORMAL
+
+        elif self.player:
+            self.player.stop()
 
     def save_pressed(self):
-
-        try:
-            self.filename = self.entries['Filename'].get()
-            # Form Validation
-            if self.filename[-4:] != ".mp3":  # Make sure filename ends with <.mp3>
-                self.filename += ".mp3"
-                self.entries['Filename'].delete(0, END)
-                self.entries['Filename'].insert(0, self.filename)
-            if exists(self.filename):
-                if messagebox.askokcancel("Overwrite existing file?", "Do you want to overwrite the existing file with the same name?"):
+        if self.saved == FALSE:
+            try:
+                self.filename = self.entries['Filename'].get()
+                # Form Validation
+                if self.filename[-4:] != ".mp3":  # Make sure filename ends with <.mp3>
+                    self.filename += ".mp3"
+                    self.entries['Filename'].delete(0, END)
+                    self.entries['Filename'].insert(0, self.filename)
+                if exists(self.filename):
+                    if messagebox.askokcancel("Overwrite existing file?",
+                                              "Do you want to overwrite the existing file with the same name?"):
+                        shutil.copyfile(self.temp_filename, self.filename)
+                else:
                     shutil.copyfile(self.temp_filename, self.filename)
-            else:
-                shutil.copyfile(self.temp_filename, self.filename)
 
-            os.remove(self.temp_filename)
-            self.temp_filename = None
+                self.saved = TRUE
 
-        except PermissionError as e:
-            print("Error:", e)
-            tkinter.messagebox.showerror('Permission Error', 'The file is currently in use, please choose a different file name!')
+            except PermissionError as e:
+                print("Error:", e)
+                tkinter.messagebox.showerror('Permission Error',
+                                             'The file is currently in use, please choose a different file name!')
 
     def record_stream(self):
         try:
@@ -171,15 +198,22 @@ class Audiorecorder:
                 self.blocksize = self.entries['Blocksize'].get()
 
             audio_src = urllib.request.urlopen(self.url)
+            start_time = time.time()
 
-            start_time = datetime.datetime.now()
-            self.temp_filename = "rec" + str(start_time.strftime("%y%m%d%H%M%S")) + ".mp3"
+            # Unterschied CLI und UI
+            if args['<url>'] is None:
+                self.temp_filename = "rec" + str(datetime.datetime.now().strftime("%y%m%d%H%M%S")) + ".mp3"
+            else:
+                self.temp_filename = args['--filename']
 
             # with open -> Datei wird nach dem Block automatisch geschlossen
             with open(self.temp_filename, 'wb') as audio_dst:
-                while (datetime.datetime.now() - start_time).seconds < int(self.duration):
-                    audio_dst.write(audio_src.read(int(self.blocksize)))
+                while (time.time() - start_time) < int(self.duration):
+                    if self.stopped == TRUE:
+                        break
                     # Puffergröße sorgt für längere Aufnahme, Streams mit möglichst großem Puffer um mangelnde Bandbreite abzufedern
+                    audio_dst.write(audio_src.read(int(self.blocksize)))
+                self.duration = round(time.time() - start_time + 1.5)
 
         except urllib.error.URLError as e:
             print("The URL could not be found:", e)
@@ -195,8 +229,7 @@ class Audiorecorder:
         else:  # no exception occured
             print("No exception occured.")
             print('Recording done')
-            self.success = TRUE
-            tkinter.messagebox.showinfo('Recording done', 'The recording finished succesfully.')
+            self.rec_done = TRUE
 
     def makeform(self):
         entries = {}
@@ -210,18 +243,23 @@ class Audiorecorder:
             entries[field] = ent
 
         controlframe = Frame(self.root)
-        self.b1 = Button(controlframe, image=self.record_img, command=self.record_pressed, width=self.bt_size, height=self.bt_size)
+        self.b1 = Button(controlframe, image=self.record_img, command=self.record_pressed, width=self.bt_size,
+                         height=self.bt_size)
         self.b1.pack(side=LEFT, padx=self.padding, pady=self.padding)
-        self.b2 = Button(controlframe, image=self.play_img, command=self.play_pressed, width=self.bt_size, height=self.bt_size)
+        self.b2 = Button(controlframe, image=self.play_img, command=self.play_pressed, width=self.bt_size,
+                         height=self.bt_size)
         self.b2.pack(side=LEFT, padx=self.padding, pady=self.padding)
         self.b2['state'] = DISABLED
-        self.b3 = Button(controlframe, image=self.pause_img, command=self.pause_pressed, width=self.bt_size, height=self.bt_size)
+        self.b3 = Button(controlframe, image=self.pause_img, command=self.pause_pressed, width=self.bt_size,
+                         height=self.bt_size)
         self.b3.pack(side=LEFT, padx=self.padding, pady=self.padding)
         self.b3['state'] = DISABLED
-        self.b4 = Button(controlframe, image=self.stop_img, command=self.stop_pressed, width=self.bt_size, height=self.bt_size)
+        self.b4 = Button(controlframe, image=self.stop_img, command=self.stop_pressed, width=self.bt_size,
+                         height=self.bt_size)
         self.b4.pack(side=LEFT, padx=self.padding, pady=self.padding)
-        self.b4['state'] = DISABLED
-        self.b5 = Button(controlframe, image=self.save_img, command=self.save_pressed, width=self.bt_size, height=self.bt_size)
+        # self.b4['state'] = DISABLED
+        self.b5 = Button(controlframe, image=self.save_img, command=self.save_pressed, width=self.bt_size,
+                         height=self.bt_size)
         self.b5.pack(side=LEFT, padx=self.padding, pady=self.padding)
         self.b5['state'] = DISABLED
         self.b6 = Button(controlframe, text='Exit', command=self.exit_pressed)
@@ -238,12 +276,12 @@ if __name__ == '__main__':
     # print(pair)
 
     # Load with UI
-    if args['<url>'] is None or args['-u'] or args['--ui']:
+    if args['<url>'] is None or args['--ui']:
         print(__doc__)
         audio_recorder = Audiorecorder('http://radios.rtbf.be/vivabxl-128.mp3', args['--filename'], args['--duration'],
                                        args['--blocksize'])
 
-    elif args['--listrecordings'] or args['-l']:
+    elif args['--listrecordings']:
         print_recordings()
 
     elif args['<url>'] is not None:
