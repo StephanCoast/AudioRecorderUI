@@ -134,7 +134,7 @@ class Audiorecorder:
                 self.entries['Duration (s)'].delete(0, END)
                 self.entries['Duration (s)'].insert(0, self.duration)
                 self.entries['Duration (s)']['state'] = DISABLED
-                print("Duration: " + self.duration)
+                print("Duration: " + str(self.duration))
 
     def play_pressed(self):
         if self.player.is_playing() == 0:
