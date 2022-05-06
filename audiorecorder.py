@@ -17,10 +17,10 @@ import vlc
 import validators
 
 __author__ = "Stephan Kost"
-__version__ = "0.1"
+__version__ = "1.0"
 
 __doc__ = \
-    """AudioRecorder
+    """AudioRecorder with User- or Command Line interface
 
     Usage:
       audiorecorder.py [<url>] [--filename=<name>] [--duration=<time>] [--blocksize=<size>]
